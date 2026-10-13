@@ -10,6 +10,8 @@ struct Image
     std::vector<float> data{};
 
     float get(int x, int y) const;
+
+    bool operator==(const Image&) const = default; 
 };
 
 Image make_image(int width, int height, float value = 255.0f);
