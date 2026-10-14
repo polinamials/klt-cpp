@@ -2,6 +2,7 @@
 #include "doctest.h"
 #include "image.hpp"
 #include "shi_tomasi.hpp"
+#include "tracker.hpp"
 
 #include <string>
 #include <string_view>
@@ -36,19 +37,19 @@ int main(int argc, char **argv)
     return context.run();
 }
 
-Image test_image()
+Image test_image(const int x = 0, const int y = 0)
 {
     auto img = make_image(360, 240, 255.0);
-    draw_rect(img, 10, 10, 25, 35, 0);
-    draw_rect(img, 100, 110, 200, 220, 0);
+    draw_rect(img, 10 + x, 10 + y, 25 + x, 35 + y, 0);
+    draw_rect(img, 100 + x, 110 + y, 200 + x, 220 + y, 0);
 
     return img;
 }
 
-const std::vector<std::pair<int, int>> expected_features()
+const std::vector<std::pair<int, int>> expected_features(int x = 0, int y = 0)
 {
     return {
-        {10, 10}, {25, 10}, {10, 35}, {25, 35}, {100, 110}, {200, 110}, {100, 220}, {200, 220}};
+        {10 + x, 10 + y}, {25 + x, 10 + y}, {10 + x, 35 + y}, {25 + x, 35 + y}, {100 + x, 110 + y}, {200 + x, 110 + y}, {100 + x, 220 + y}, {200 + x, 220 + y}};
 }
 
 // Image tests
@@ -87,5 +88,36 @@ TEST_CASE("extract features")
             });
 
         CHECK_MESSAGE(found, "Feature not detected near (", x, ", ", y, ")");
+    }
+}
+
+// Tracking tests
+
+TEST_CASE("track features")
+{
+    constexpr float dx = 3.0f;
+    constexpr float dy = 2.0f;
+    constexpr float tolerance = 0.05f;
+
+    auto img1 = test_image();
+    auto img2 = test_image(3, 2);
+
+    Config config{};
+
+    auto features = select_good_features(img1, config);
+    auto results = track_features(img1, img2, features, config);
+
+    REQUIRE(results.size() == features.size());
+    REQUIRE_FALSE(features.empty());
+
+    for (size_t i = 0; i < features.size(); ++i)
+    {
+        std::cout << "Original feature: (" << features[i].x << ", " << features[i].y<< ")\n";
+        std::cout << "Tracked feature: (" << results[i].x << ", " << results[i].y<< ")\n\n";
+
+        REQUIRE(results[i].status == TrackStatus::Tracked);
+
+        CHECK(results[i].x == doctest::Approx(features[i].x + dx).epsilon(tolerance));
+        CHECK(results[i].y == doctest::Approx(features[i].y + dy).epsilon(tolerance));
     }
 }
