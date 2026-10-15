@@ -2,7 +2,7 @@
 
 #include "common.hpp"
 #include "image.hpp"
-#include "shi_tomasi.hpp"
+#include "feature_extractor.hpp"
 
 #include <vector>
 

@@ -1,4 +1,4 @@
-#include "shi_tomasi.hpp"
+#include "feature_extractor.hpp"
 
 #include <algorithm>
 #include <cassert>

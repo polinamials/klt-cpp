@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include "doctest.h"
 #include "image.hpp"
-#include "shi_tomasi.hpp"
+#include "feature_extractor.hpp"
 #include "tracker.hpp"
 
 #include <string>

@@ -8,7 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(klt-cpp SHARED
     src/image.cpp
-    src/shi_tomasi.cpp
+    src/feature_extractor.cpp
     src/tracker.cpp
 )
 
