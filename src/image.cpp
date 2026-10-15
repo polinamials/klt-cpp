@@ -74,4 +74,11 @@ namespace IO
 
         return img;
     }
+
+    void resize_image(Image &img, int w, int h)
+    {
+        img.width = w;
+        img.height = h;
+        img.data.resize(static_cast<std::size_t>(w) * h);
+    }
 }

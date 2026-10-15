@@ -23,4 +23,6 @@ namespace IO
     void save_pgm(const Image &img, const std::string &path);
 
     Image load_pgm(const std::string &path);
+
+    void resize_image(Image &img, int w, int h);
 }

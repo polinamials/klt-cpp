@@ -6,9 +6,6 @@
 #include "image.hpp"
 #include "common.hpp"
 
-using namespace IO;
-using namespace Common;
-
 namespace FeatureExtractor
 {
     struct Feature
@@ -18,21 +15,9 @@ namespace FeatureExtractor
         float score;
     };
 
-    std::pair<std::vector<float>, std::vector<float>> compute_kernels(float sigma = 1.0f);
+    std::vector<Feature> select_good_features(const IO::Image &img, const Common::Config &config);
 
-    Image convolve(const Image &img, const std::vector<float> &kernel, bool horizontal);
+    IO::Image gaussian_blur(const IO::Image &img, float sigma);
 
-    Image convolve_horiz(const Image &img, const std::vector<float> &kernel);
-
-    Image convolve_vert(const Image &img, const std::vector<float> &kernel);
-
-    Image convolve_separate(const Image &img, const std::vector<float> &kernel_horiz,
-                            const std::vector<float> &kernel_vert);
-
-    std::pair<Image, Image> compute_gradients(const Image &img, float sigma = 1.0f);
-
-    float min_eigenvalue(float gxx, float gxy, float gyy);
-
-    std::vector<Feature> select_good_features(const Image &img,
-                                              const Config &config);
+    std::pair<IO::Image, IO::Image> image_gradients(const IO::Image &img, float sigma);
 }
