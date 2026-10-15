@@ -331,4 +331,28 @@ namespace FeatureExtractor
         return choose_features(img, config, s);
     }
 
+    void draw_features(
+        const Image &img,
+        Image &output,
+        const std::vector<Feature> &features,
+        const Color &color,
+        int r)
+    {
+        if (img.pixel_format == PixelFormat::GREY)
+            convert_grey_2_rgb(img, output);
+        else
+            output = img;
+
+        for (const auto &f : features)
+        {
+            draw_rect(
+                output,
+                std::max(0, f.x - r),
+                std::max(0, f.y - r),
+                std::min(output.width, f.x + r + 1),
+                std::min(output.height, f.y + r + 1),
+                color);
+        }
+    }
+
 } // namespace FeatureExtractor

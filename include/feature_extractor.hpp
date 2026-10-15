@@ -20,4 +20,7 @@ namespace FeatureExtractor
     IO::Image gaussian_blur(const IO::Image &img, float sigma);
 
     std::pair<IO::Image, IO::Image> image_gradients(const IO::Image &img, float sigma);
+
+    void draw_features(const IO::Image &img, IO::Image &output, const std::vector<Feature> &features, const IO::Color &color, int r = 2);
+
 }
