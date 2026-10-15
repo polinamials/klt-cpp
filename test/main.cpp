@@ -12,6 +12,8 @@
 
 std::string g_image_path;
 
+using namespace Tracker;
+
 int main(int argc, char **argv)
 {
     doctest::Context context;
@@ -81,7 +83,7 @@ TEST_CASE("extract features")
     {
         const bool found = std::any_of(
             features.begin(), features.end(),
-            [&](const FeatureCandidate &feature)
+            [&](const Feature &feature)
             {
                 return std::abs(feature.x - x) <= tolerance &&
                        std::abs(feature.y - y) <= tolerance;
