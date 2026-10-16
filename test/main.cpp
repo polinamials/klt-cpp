@@ -10,7 +10,8 @@
 #include <filesystem>
 #include <iostream>
 
-std::string g_image_path;
+std::string g_image_path{"images"};
+std::string g_output_path{"output"};
 
 using namespace Tracker;
 
@@ -18,32 +19,32 @@ int main(int argc, char **argv)
 {
     doctest::Context context;
 
-    constexpr std::string_view prefix = "--image_path=";
-
+    constexpr std::string_view image_prefix = "--image_path=";
+    constexpr std::string_view output_prefix = "--output_path=";
     std::vector<char *> doctest_args{argv[0]};
 
     for (int i = 1; i < argc; ++i)
     {
-        std::string_view arg = argv[i];
-
-        if (arg.starts_with(prefix))
-            g_image_path = arg.substr(prefix.size());
+        const std::string_view arg = argv[i];
+        if (arg.starts_with(image_prefix))
+            g_image_path = arg.substr(image_prefix.size());
+        else if (arg.starts_with(output_prefix))
+            g_output_path = arg.substr(output_prefix.size());
         else
             doctest_args.push_back(argv[i]);
     }
 
+    std::filesystem::create_directories(g_output_path);
     context.applyCommandLine(
-        static_cast<int>(doctest_args.size()),
-        doctest_args.data());
-
+        static_cast<int>(doctest_args.size()), doctest_args.data());
     return context.run();
 }
 
 Image test_image(const int x = 0, const int y = 0)
 {
     auto img = make_image(360, 240, 255.0);
-    draw_rect(img, 10 + x, 10 + y, 25 + x, 35 + y, 0);
-    draw_rect(img, 100 + x, 110 + y, 200 + x, 220 + y, 0);
+    draw_rect(img, 40 + x, 40 + y, 55 + x, 65 + y, 0);
+    draw_rect(img, 100 + x, 110 + y, 200 + x, 200 + y, 0);
 
     return img;
 }
@@ -63,14 +64,45 @@ Image test_image_rgb(const int x = 0, const int y = 0)
 const std::vector<std::pair<int, int>> expected_features(int x = 0, int y = 0)
 {
     return {
-        {10 + x, 10 + y}, {25 + x, 10 + y}, {10 + x, 35 + y}, {25 + x, 35 + y}, {100 + x, 110 + y}, {200 + x, 110 + y}, {100 + x, 220 + y}, {200 + x, 220 + y}};
+        {40 + x, 40 + y}, {55 + x, 40 + y}, {40 + x, 65 + y}, {55 + x, 65 + y}, {100 + x, 110 + y}, {200 + x, 110 + y}, {100 + x, 200 + y}, {200 + x, 200 + y}};
+}
+
+TEST_CASE("default pyramid and border match original KLT")
+{
+    const Config config = create_config();
+
+    CHECK(config.window_width == 7);
+    CHECK(config.window_height == 7);
+    CHECK(config.num_pyramid_levels == 2);
+    CHECK(config.pyramid_subsampling == 4);
+    CHECK(config.borderx == 24);
+    CHECK(config.bordery == 24);
+}
+
+TEST_CASE("feature selection respects configured border")
+{
+    auto img = make_image(120, 100, 255.0f);
+    draw_rect(img, 5, 5, 20, 20, 0.0f);
+    draw_rect(img, 40, 40, 60, 60, 0.0f);
+
+    const Config config = create_config();
+    const auto features = select_good_features(img, config);
+
+    REQUIRE_FALSE(features.empty());
+    for (const auto &feature : features)
+    {
+        CHECK(feature.x >= config.borderx);
+        CHECK(feature.x <= img.width - 1 - config.borderx);
+        CHECK(feature.y >= config.bordery);
+        CHECK(feature.y <= img.height - 1 - config.bordery);
+    }
 }
 
 // Image tests
 TEST_CASE("save load pgm")
 {
     auto img = test_image();
-    std::string filepath = g_image_path + "/test.pgm";
+    std::string filepath = g_output_path + "/test.pgm";
 
     save_img(img, filepath);
     CHECK(std::filesystem::exists(std::filesystem::path(filepath)));
@@ -81,7 +113,7 @@ TEST_CASE("save load pgm")
 TEST_CASE("save load ppm")
 {
     auto img = test_image_rgb();
-    std::string filepath = g_image_path + "/test.ppm";
+    std::string filepath = g_output_path + "/test.ppm";
 
     save_img(img, filepath);
     CHECK(std::filesystem::exists(std::filesystem::path(filepath)));
@@ -128,7 +160,7 @@ TEST_CASE("draw features")
     Image output;
     auto c = Color(255.0f,0.0f,0.0f);
     draw_features(img, output, features, c);
-    std::string filepath = g_image_path + "/features.ppm";
+    std::string filepath = g_output_path + "/features.ppm";
     save_img(output, filepath);
 }
 
@@ -136,13 +168,13 @@ TEST_CASE("real image")
 {
     auto img = load_img(g_image_path + "/img0.pgm");
     Config config{};
-    config.max_features = 100;
+    config.max_features = 150;
     auto features = select_good_features(img, config);
 
     Image output;
     auto c = Color(255.0f,0.0f,0.0f);
     draw_features(img, output, features, c);
-    save_img(output, g_image_path + "/img0_features.ppm");
+    save_img(output, g_output_path + "/img0_features.ppm");
 }
 
 
@@ -172,7 +204,22 @@ TEST_CASE("track features")
 
         REQUIRE(results[i].status == TrackStatus::Tracked);
 
-        CHECK(results[i].x == doctest::Approx(features[i].x + dx).epsilon(tolerance));
-        CHECK(results[i].y == doctest::Approx(features[i].y + dy).epsilon(tolerance));
+        CHECK(std::abs(results[i].x - (features[i].x + dx)) <= tolerance);
+        CHECK(std::abs(results[i].y - (features[i].y + dy)) <= tolerance);
     }
+}
+
+TEST_CASE("tracked features outside the configured border are rejected")
+{
+    auto img = make_image(120, 100, 255.0f);
+    draw_rect(img, 20, 40, 40, 60, 0.0f);
+
+    const Config config = create_config();
+    const std::vector<Feature> features{{20, 40, 1.0f}};
+    const auto results = track_features(img, img, features, config);
+
+    REQUIRE(results.size() == 1);
+    CHECK(results[0].status == TrackStatus::OutOfBounds);
+    CHECK(results[0].x == -1.0f);
+    CHECK(results[0].y == -1.0f);
 }

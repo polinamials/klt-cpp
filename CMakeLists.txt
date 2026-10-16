@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(klt-cpp SHARED
+    src/common.cpp
     src/image.cpp
     src/feature_extractor.cpp
     src/tracker.cpp

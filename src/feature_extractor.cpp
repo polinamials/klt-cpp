@@ -17,54 +17,6 @@ namespace FeatureExtractor
     namespace
     {
 
-        constexpr double gauss_cutoff = 3.0348542587702925;
-        constexpr double deriv_cutoff = 3.571606252443768;
-
-        struct Kernels
-        {
-            std::vector<float> gauss;
-            std::vector<float> deriv;
-        };
-
-        Kernels make_kernels(float sigma)
-        {
-            if (!(sigma > 0.0f) || !std::isfinite(sigma))
-                throw std::invalid_argument("sigma must be finite and positive");
-
-            const int rg = static_cast<int>(gauss_cutoff * sigma);
-            const int rd = static_cast<int>(deriv_cutoff * sigma);
-            if (rd == 0)
-                throw std::invalid_argument("sigma is too small for a derivative kernel");
-
-            Kernels k;
-            k.gauss.resize(static_cast<std::size_t>(rg) + 1);
-            k.deriv.resize(static_cast<std::size_t>(rd) + 1);
-            // Store only the center and positive half of each symmetric/antisymmetric kernel.
-            // k.gauss[i] = G(+i); k.deriv[i] = G'(+i), so k.deriv[i] < 0 for i > 0.
-            const float inv_two_sigma_sq = 0.5f / (sigma * sigma);
-            float gauss_sum = 0.0f;
-            float deriv_moment = 0.0f;
-            for (int i = 0; i <= std::max(rg, rd); ++i)
-            {
-                const float g = std::exp(-static_cast<float>(i * i) * inv_two_sigma_sq);
-                if (i <= rg)
-                {
-                    k.gauss[i] = g;
-                    gauss_sum += (i == 0 ? 1.0f : 2.0f) * g;
-                }
-                if (i <= rd)
-                {
-                    k.deriv[i] = -static_cast<float>(i) * g;
-                    deriv_moment += 2.0f * static_cast<float>(i * i) * g;
-                }
-            }
-            for (float &v : k.gauss)
-                v /= gauss_sum;
-            for (float &v : k.deriv)
-                v /= deriv_moment;
-            return k;
-        }
-
         // The caller's original implementation uses correlation (sample at x+k),
         // not mathematically reversed convolution. Keep that convention, including
         // the sign of the Gaussian derivative, for compatibility with the tracker.
@@ -128,6 +80,8 @@ namespace FeatureExtractor
 
         struct Scratch
         {
+            Image blur_tmp{0, 0};
+            Image smoothed{0, 0};
             Image tmp{0, 0};
             Image gradx{0, 0};
             Image grady{0, 0};
@@ -141,6 +95,15 @@ namespace FeatureExtractor
         {
             static thread_local Scratch s;
             return s;
+        }
+
+        void gaussian_blur_into(const Image &img, Image &tmp, Image &result,
+                                const std::vector<float> &kernel)
+        {
+            resize_image(tmp, img.width, img.height);
+            resize_image(result, img.width, img.height);
+            filter_axis<false, false>(img, tmp, kernel);
+            filter_axis<true, false>(tmp, result, kernel);
         }
 
         void compute_gradients(const Image &img, Scratch &s, const Kernels &k)
@@ -160,27 +123,35 @@ namespace FeatureExtractor
 
         // An exact sliding box sum of gradient products, apart from floating-point
         // addition order. Complexity: O(width * height), not O(pixels * window area).
-        void find_candidates(const Image &img, const Config &cfg, Scratch &s)
+        void find_candidates(
+            const Image &img,
+            const Image &gradx,
+            const Image &grady,
+            const Config &cfg,
+            Scratch &s)
         {
             const int w = img.width;
             const int h = img.height;
             const int hw = cfg.window_width / 2;
             const int hh = cfg.window_height / 2;
+            const int borderx = std::max(cfg.borderx, hw);
+            const int bordery = std::max(cfg.bordery, hh);
             const float threshold = std::max(1.0f, static_cast<float>(cfg.min_eigenvalue));
 
             s.candidates.clear();
-            if (cfg.window_width > w || cfg.window_height > h)
+            if (cfg.window_width > w || cfg.window_height > h ||
+                borderx >= w - borderx || bordery >= h - bordery)
                 return;
 
             s.col_xx.assign(static_cast<std::size_t>(w), 0.0f);
             s.col_xy.assign(static_cast<std::size_t>(w), 0.0f);
             s.col_yy.assign(static_cast<std::size_t>(w), 0.0f);
 
-            const float *const gx = s.gradx.data.data();
-            const float *const gy = s.grady.data.data();
+            const float *const gx = gradx.data.data();
+            const float *const gy = grady.data.data();
 
-            // Initial vertical sums (window rows 0..2*hh inclusive).
-            for (int yy = 0; yy < cfg.window_height; ++yy)
+            // Initial vertical sums for the first row inside the valid border.
+            for (int yy = bordery - hh; yy <= bordery + hh; ++yy)
             {
                 const std::size_t base = static_cast<std::size_t>(yy) * w;
                 for (int xx = 0; xx < w; ++xx)
@@ -193,9 +164,9 @@ namespace FeatureExtractor
                 }
             }
 
-            for (int y = hh; y < h - hh; ++y)
+            for (int y = bordery; y < h - bordery; ++y)
             {
-                if (y != hh)
+                if (y != bordery)
                 {
                     const std::size_t old_base = static_cast<std::size_t>(y - hh - 1) * w;
                     const std::size_t new_base = static_cast<std::size_t>(y + hh) * w;
@@ -210,16 +181,16 @@ namespace FeatureExtractor
                 }
 
                 float gxx = 0.0f, gxy = 0.0f, gyy = 0.0f;
-                for (int xx = 0; xx < cfg.window_width; ++xx)
+                for (int xx = borderx - hw; xx <= borderx + hw; ++xx)
                 {
                     gxx += s.col_xx[xx];
                     gxy += s.col_xy[xx];
                     gyy += s.col_yy[xx];
                 }
 
-                for (int x = hw; x < w - hw; ++x)
+                for (int x = borderx; x < w - borderx; ++x)
                 {
-                    if (x != hw)
+                    if (x != borderx)
                     {
                         const int leave = x - hw - 1;
                         const int enter = x + hw;
@@ -246,6 +217,33 @@ namespace FeatureExtractor
             }
         }
 
+        void mark_occupied(
+            std::vector<std::uint8_t> &occupied,
+            int width,
+            int height,
+            int x,
+            int y,
+            int radius)
+        {
+            if (radius < 0)
+                return;
+
+            const int xmin = std::max(0, x - radius);
+            const int xmax = std::min(width - 1, x + radius);
+            const int ymin = std::max(0, y - radius);
+            const int ymax = std::min(height - 1, y + radius);
+            for (int yy = ymin; yy <= ymax; ++yy)
+            {
+                auto *row = occupied.data() + static_cast<std::size_t>(yy) * width;
+                std::fill(row + xmin, row + xmax + 1, static_cast<std::uint8_t>(1));
+            }
+        }
+
+        const auto lower_score = [](const Feature &a, const Feature &b)
+        {
+            return a.score < b.score;
+        };
+
         std::vector<Feature> choose_features(const Image &img, const Config &cfg, Scratch &s)
         {
             std::vector<Feature> selected;
@@ -253,10 +251,6 @@ namespace FeatureExtractor
                                       static_cast<std::size_t>(cfg.max_features)));
             s.occupied.assign(static_cast<std::size_t>(img.width) * img.height, 0);
 
-            const auto lower_score = [](const Feature &a, const Feature &b)
-            {
-                return a.score < b.score;
-            };
             // Heap: O(n) construction; stop popping once max_features have been selected.
             // Avoids sorting all candidates when many more are available than needed.
             std::make_heap(s.candidates.begin(), s.candidates.end(), lower_score);
@@ -275,21 +269,75 @@ namespace FeatureExtractor
                 selected.push_back(candidate);
 
                 // Original KLT _fillFeaturemap uses a square of radius mindist - 1.
-                const int radius = cfg.min_dist - 1;
-                if (radius >= 0)
-                {
-                    const int xmin = std::max(0, x - radius);
-                    const int xmax = std::min(img.width - 1, x + radius);
-                    const int ymin = std::max(0, y - radius);
-                    const int ymax = std::min(img.height - 1, y + radius);
-                    for (int yy = ymin; yy <= ymax; ++yy)
-                    {
-                        auto *row = s.occupied.data() + static_cast<std::size_t>(yy) * img.width;
-                        std::fill(row + xmin, row + xmax + 1, static_cast<std::uint8_t>(1));
-                    }
-                }
+                mark_occupied(
+                    s.occupied, img.width, img.height,
+                    x, y, cfg.min_dist - 1);
             }
             return selected;
+        }
+
+        void replace_features(
+            const Image &img,
+            const Config &cfg,
+            Scratch &s,
+            std::vector<Feature> &features)
+        {
+            s.occupied.assign(static_cast<std::size_t>(img.width) * img.height, 0);
+            const int radius = cfg.min_dist - 1;
+            for (const Feature &feature : features)
+            {
+                if (feature.score >= 0.0f)
+                {
+                    mark_occupied(
+                        s.occupied, img.width, img.height,
+                        feature.x, feature.y, radius);
+                }
+            }
+
+            std::make_heap(s.candidates.begin(), s.candidates.end(), lower_score);
+            std::size_t lost_index = 0;
+            while (!s.candidates.empty())
+            {
+                while (lost_index < features.size() &&
+                       features[lost_index].score >= 0.0f)
+                {
+                    ++lost_index;
+                }
+                if (lost_index == features.size())
+                    break;
+
+                std::pop_heap(s.candidates.begin(), s.candidates.end(), lower_score);
+                const Feature candidate = s.candidates.back();
+                s.candidates.pop_back();
+
+                const std::size_t pos =
+                    static_cast<std::size_t>(candidate.y) * img.width + candidate.x;
+                if (s.occupied[pos])
+                    continue;
+
+                features[lost_index] = candidate;
+                mark_occupied(
+                    s.occupied, img.width, img.height,
+                    candidate.x, candidate.y, radius);
+                ++lost_index;
+            }
+        }
+
+        void validate_gradients(
+            const Image &img,
+            const Image &gradx,
+            const Image &grady)
+        {
+            const auto pixel_count =
+                static_cast<std::size_t>(img.width) * img.height;
+            if (gradx.width != img.width || gradx.height != img.height ||
+                grady.width != img.width || grady.height != img.height ||
+                gradx.data.size() != pixel_count ||
+                grady.data.size() != pixel_count)
+            {
+                throw std::invalid_argument(
+                    "Gradient images must match the source image");
+            }
         }
 
     } // anonymous namespace
@@ -299,10 +347,7 @@ namespace FeatureExtractor
         const auto k = make_kernels(sigma);
         Image tmp{img.width, img.height};
         Image result{img.width, img.height};
-        resize_image(tmp, img.width, img.height);
-        resize_image(result, img.width, img.height);
-        filter_axis<false, false>(img, tmp, k.gauss);
-        filter_axis<true, false>(tmp, result, k.gauss);
+        gaussian_blur_into(img, tmp, result, k.gauss);
         return result;
     }
 
@@ -326,9 +371,93 @@ namespace FeatureExtractor
             return {};
 
         auto &s = scratch();
-        compute_gradients(img, s, make_kernels(config.sigma));
-        find_candidates(img, config, s);
+        const auto smooth_kernels = make_kernels(compute_smooth_sigma(config));
+        gaussian_blur_into(img, s.blur_tmp, s.smoothed, smooth_kernels.gauss);
+        compute_gradients(s.smoothed, s, make_kernels(config.sigma));
+        find_candidates(img, s.gradx, s.grady, config, s);
         return choose_features(img, config, s);
+    }
+
+    void select_good_features(
+        const Image &img,
+        const Image &gradx,
+        const Image &grady,
+        std::vector<Feature> &features,
+        const Config &config)
+    {
+        assert(config.window_width >= 3 && config.window_width % 2 == 1);
+        assert(config.window_height >= 3 && config.window_height % 2 == 1);
+        assert(config.min_dist >= 0);
+        assert(img.width > 0 && img.height > 0);
+        assert(img.data.size() == static_cast<std::size_t>(img.width) * img.height);
+
+        if (std::none_of(
+                features.begin(), features.end(),
+                [](const Feature &feature)
+                { return feature.score < 0.0f; }))
+        {
+            return;
+        }
+
+        validate_gradients(img, gradx, grady);
+        if (config.window_width > img.width || config.window_height > img.height)
+        {
+            return;
+        }
+
+        auto &s = scratch();
+        find_candidates(img, gradx, grady, config, s);
+        replace_features(img, config, s, features);
+    }
+
+    void replace_lost_features(
+        const Image &img,
+        std::vector<Feature> &features,
+        const Config &config)
+    {
+        assert(config.window_width >= 3 && config.window_width % 2 == 1);
+        assert(config.window_height >= 3 && config.window_height % 2 == 1);
+        assert(config.min_dist >= 0);
+        assert(img.width > 0 && img.height > 0);
+        assert(img.data.size() == static_cast<std::size_t>(img.width) * img.height);
+
+        if (std::none_of(
+                features.begin(), features.end(),
+                [](const Feature &feature)
+                { return feature.score < 0.0f; }))
+        {
+            return;
+        }
+
+        auto &s = scratch();
+        const auto smooth_kernels = make_kernels(compute_smooth_sigma(config));
+        gaussian_blur_into(img, s.blur_tmp, s.smoothed, smooth_kernels.gauss);
+        compute_gradients(s.smoothed, s, make_kernels(config.sigma));
+        replace_lost_features(s.smoothed, s.gradx, s.grady, features, config);
+    }
+
+    void replace_lost_features(
+        const Image &img,
+        const Image &gradx,
+        const Image &grady,
+        std::vector<Feature> &features,
+        const Config &config)
+    {
+        assert(config.window_width >= 3 && config.window_width % 2 == 1);
+        assert(config.window_height >= 3 && config.window_height % 2 == 1);
+        assert(config.min_dist >= 0);
+        assert(img.width > 0 && img.height > 0);
+        assert(img.data.size() == static_cast<std::size_t>(img.width) * img.height);
+
+        if (std::none_of(
+                features.begin(), features.end(),
+                [](const Feature &feature)
+                { return feature.score < 0.0f; }))
+        {
+            return;
+        }
+
+        select_good_features(img, gradx, grady, features, config);
     }
 
     void draw_features(

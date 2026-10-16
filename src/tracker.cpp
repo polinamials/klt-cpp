@@ -14,16 +14,115 @@ namespace FeatureExtractor
 }
 
 using namespace FeatureExtractor;
+using namespace Common;
 namespace Tracker
 {
+    namespace
+    {
+        bool point_inside_border(const Image &img, float x, float y,
+                                 int borderx, int bordery)
+        {
+            return x >= borderx && x <= img.width - 1 - borderx &&
+                   y >= bordery && y <= img.height - 1 - bordery;
+        }
+
+        void validate_pyramids(const ImagePyramids &p1, const ImagePyramids &p2)
+        {
+            const auto level_count = p1.image.levels.size();
+            if (level_count == 0 || p2.image.levels.size() != level_count ||
+                p1.gradx.levels.size() != level_count ||
+                p1.grady.levels.size() != level_count ||
+                p2.gradx.levels.size() != level_count ||
+                p2.grady.levels.size() != level_count ||
+                p1.image.subsampling != p2.image.subsampling)
+            {
+                throw std::invalid_argument("Incompatible image pyramids");
+            }
+
+            for (std::size_t level = 0; level < level_count; ++level)
+            {
+                const Image &a = p1.image.levels[level];
+                const Image &b = p2.image.levels[level];
+                if (a.width != b.width || a.height != b.height ||
+                    p1.gradx.levels[level].width != a.width ||
+                    p1.gradx.levels[level].height != a.height ||
+                    p1.grady.levels[level].width != a.width ||
+                    p1.grady.levels[level].height != a.height ||
+                    p2.gradx.levels[level].width != b.width ||
+                    p2.gradx.levels[level].height != b.height ||
+                    p2.grady.levels[level].width != b.width ||
+                    p2.grady.levels[level].height != b.height)
+                {
+                    throw std::invalid_argument("Incompatible image pyramids");
+                }
+            }
+        }
+
+        std::vector<TrackResult> track_prepared(
+            const ImagePyramids &p1,
+            const ImagePyramids &p2,
+            const std::vector<TrackResult> &positions,
+            const Config &config);
+
+        bool is_active(TrackStatus status)
+        {
+            return status == TrackStatus::Tracked ||
+                   status == TrackStatus::Replaced;
+        }
+
+        void replace_lost_positions(
+            const ImagePyramids &current,
+            std::vector<TrackResult> &positions,
+            const Config &config)
+        {
+            if (std::none_of(
+                    positions.begin(), positions.end(),
+                    [](const TrackResult &position)
+                    { return !is_active(position.status); }))
+            {
+                return;
+            }
+
+            std::vector<Feature> features;
+            features.reserve(positions.size());
+            for (const TrackResult &position : positions)
+            {
+                if (is_active(position.status))
+                {
+                    features.push_back(
+                        {static_cast<int>(position.x),
+                         static_cast<int>(position.y),
+                         0.0f});
+                }
+                else
+                {
+                    features.push_back({-1, -1, -1.0f});
+                }
+            }
+
+            replace_lost_features(
+                current.image.levels.front(),
+                current.gradx.levels.front(),
+                current.grady.levels.front(),
+                features,
+                config);
+
+            for (std::size_t i = 0; i < positions.size(); ++i)
+            {
+                if (!is_active(positions[i].status) && features[i].score >= 0.0f)
+                {
+                    positions[i] = {
+                        static_cast<float>(features[i].x),
+                        static_cast<float>(features[i].y),
+                        TrackStatus::Replaced};
+                }
+            }
+        }
+    }
+
     Image compute_smoothed_image(const Image &img, float sigma)
     {
         return FeatureExtractor::gaussian_blur(img, sigma);
-    }
-    float compute_smooth_sigma(const Config &config)
-    {
-        return config.smooth_sigma_fact *
-               std::max(config.window_width, config.window_height);
     }
     Pyramid compute_pyramid(const Image &img, float sigma_fact,
                             int subsampling, int num_levels)
@@ -58,7 +157,9 @@ namespace Tracker
     {
         ImagePyramids result;
         Image smoothed = compute_smoothed_image(img, compute_smooth_sigma(config));
-        result.image = compute_pyramid(smoothed, config.pyramid_sigma_fact);
+        result.image = compute_pyramid(
+            smoothed, config.pyramid_sigma_fact,
+            config.pyramid_subsampling, config.num_pyramid_levels);
         result.gradx.subsampling = result.image.subsampling;
         result.grady.subsampling = result.image.subsampling;
         for (const Image &level : result.image.levels)
@@ -91,6 +192,7 @@ namespace Tracker
                x + half_width < img.width - 1 &&
                y + half_height < img.height - 1;
     }
+
     TrackResult track_feature(float x1, float y1, float x2, float y2,
                               const Image &img1, const Image &gradx1,
                               const Image &grady1, const Image &img2,
@@ -199,6 +301,70 @@ namespace Tracker
             return {x2, y2, TrackStatus::LargeResidue};
         return {x2, y2, TrackStatus::Tracked};
     }
+    namespace
+    {
+        std::vector<TrackResult> track_prepared(
+            const ImagePyramids &p1,
+            const ImagePyramids &p2,
+            const std::vector<TrackResult> &positions,
+            const Config &config)
+        {
+            validate_pyramids(p1, p2);
+            const int subsampling = p1.image.subsampling;
+            const int last_level = static_cast<int>(p1.image.levels.size()) - 1;
+            std::vector<TrackResult> results;
+            results.reserve(positions.size());
+            for (const TrackResult &position : positions)
+            {
+                if (!is_active(position.status))
+                {
+                    results.push_back(position);
+                    continue;
+                }
+
+                float x1 = position.x;
+                float y1 = position.y;
+                for (int level = 0; level < last_level; ++level)
+                {
+                    x1 /= subsampling;
+                    y1 /= subsampling;
+                }
+                float x2 = x1, y2 = y1;
+                TrackResult tracked{x2, y2, TrackStatus::Tracked};
+                for (int level = last_level; level >= 0; --level)
+                {
+                    if (level != last_level)
+                    {
+                        x1 *= subsampling;
+                        y1 *= subsampling;
+                        x2 *= subsampling;
+                        y2 *= subsampling;
+                    }
+                    tracked = track_feature(
+                        x1, y1, x2, y2,
+                        p1.image.levels[level], p1.gradx.levels[level], p1.grady.levels[level],
+                        p2.image.levels[level], p2.gradx.levels[level], p2.grady.levels[level],
+                        config);
+                    x2 = tracked.x;
+                    y2 = tracked.y;
+                    if (tracked.status == TrackStatus::OutOfBounds ||
+                        tracked.status == TrackStatus::SmallDeterminant)
+                        break;
+                }
+                if (!point_inside_border(
+                        p2.image.levels.front(), tracked.x, tracked.y,
+                        config.borderx, config.bordery))
+                {
+                    tracked.status = TrackStatus::OutOfBounds;
+                }
+                if (tracked.status != TrackStatus::Tracked)
+                    tracked.x = tracked.y = -1.0f;
+                results.push_back(tracked);
+            }
+            return results;
+        }
+    }
+
     std::vector<TrackResult> track_features(
         const Image &img1, const Image &img2,
         const std::vector<Feature> &features,
@@ -206,47 +372,64 @@ namespace Tracker
     {
         if (img1.width != img2.width || img1.height != img2.height)
             throw std::invalid_argument("Images must have equal dimensions");
+
         const auto p1 = compute_image_pyramids(img1, config);
         const auto p2 = compute_image_pyramids(img2, config);
-        const int subsampling = p1.image.subsampling;
-        const int last_level = static_cast<int>(p1.image.levels.size()) - 1;
-        std::vector<TrackResult> results;
-        results.reserve(features.size());
-        for (const auto &feature : features)
+        std::vector<TrackResult> positions;
+        positions.reserve(features.size());
+        for (const Feature &feature : features)
         {
-            float x1 = static_cast<float>(feature.x);
-            float y1 = static_cast<float>(feature.y);
-            for (int level = 0; level < last_level; ++level)
-            {
-                x1 /= subsampling;
-                y1 /= subsampling;
-            }
-            float x2 = x1, y2 = y1;
-            TrackResult tracked{x2, y2, TrackStatus::Tracked};
-            for (int level = last_level; level >= 0; --level)
-            {
-                if (level != last_level)
-                {
-                    x1 *= subsampling;
-                    y1 *= subsampling;
-                    x2 *= subsampling;
-                    y2 *= subsampling;
-                }
-                tracked = track_feature(
-                    x1, y1, x2, y2,
-                    p1.image.levels[level], p1.gradx.levels[level], p1.grady.levels[level],
-                    p2.image.levels[level], p2.gradx.levels[level], p2.grady.levels[level],
-                    config);
-                x2 = tracked.x;
-                y2 = tracked.y;
-                if (tracked.status == TrackStatus::OutOfBounds ||
-                    tracked.status == TrackStatus::SmallDeterminant)
-                    break;
-            }
-            if (tracked.status != TrackStatus::Tracked)
-                tracked.x = tracked.y = -1.0f;
-            results.push_back(tracked);
+            positions.push_back(
+                {static_cast<float>(feature.x),
+                 static_cast<float>(feature.y),
+                 TrackStatus::Tracked});
         }
-        return results;
+        return track_prepared(p1, p2, positions, config);
+    }
+
+    std::vector<Track> track(const std::vector<Image> &imgs, const Config &config)
+    {
+        if (imgs.empty())
+            return {};
+
+        const Image &first = imgs.front();
+        for (const Image &img : imgs)
+        {
+            if (img.width != first.width || img.height != first.height)
+                throw std::invalid_argument("Images must have equal dimensions");
+        }
+
+        const auto features = select_good_features(first, config);
+        std::vector<TrackResult> positions;
+        positions.reserve(features.size());
+
+        std::vector<Track> tracks(features.size());
+        for (std::size_t i = 0; i < features.size(); ++i)
+        {
+            const TrackResult initial{
+                static_cast<float>(features[i].x),
+                static_cast<float>(features[i].y),
+                TrackStatus::Tracked};
+            positions.push_back(initial);
+            tracks[i].positions.reserve(imgs.size());
+            tracks[i].positions.push_back(initial);
+        }
+
+        if (imgs.size() == 1 || tracks.empty())
+            return tracks;
+
+        auto previous = compute_image_pyramids(first, config);
+        for (std::size_t frame = 1; frame < imgs.size(); ++frame)
+        {
+            auto current = compute_image_pyramids(imgs[frame], config);
+            positions = track_prepared(previous, current, positions, config);
+            replace_lost_positions(current, positions, config);
+
+            for (std::size_t feature = 0; feature < tracks.size(); ++feature)
+                tracks[feature].positions.push_back(positions[feature]);
+
+            previous = std::move(current);
+        }
+        return tracks;
     }
 }

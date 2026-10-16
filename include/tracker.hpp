@@ -14,12 +14,12 @@ namespace Tracker
 {
     struct Pyramid
     {
-        int subsampling = 2;
+        int subsampling{2};
         std::vector<Image> levels;
     };
 
     Image compute_smoothed_image(const Image &img, float sigma);
-    float compute_smooth_sigma(const Config &config);
+
     Pyramid compute_pyramid(const Image &img, float sigma_fact,
                             int subsampling = 2, int num_levels = 2);
 
@@ -39,7 +39,8 @@ namespace Tracker
         SmallDeterminant,
         OutOfBounds,
         LargeResidue,
-        MaxIterations
+        MaxIterations,
+        Replaced
     };
 
     struct TrackResult
@@ -47,6 +48,12 @@ namespace Tracker
         float x = 0.0f;
         float y = 0.0f;
         TrackStatus status = TrackStatus::Tracked;
+    };
+
+    struct Track
+    {
+        // One entry per input image, preserving the feature's subpixel position.
+        std::vector<TrackResult> positions;
     };
 
     bool patch_fits(const Image &img, float x, float y,
@@ -58,8 +65,13 @@ namespace Tracker
                               const Image &gradx2, const Image &grady2,
                               const Config &config);
 
+    // Tracks selected features between two images.
     std::vector<TrackResult> track_features(
         const Image &img1, const Image &img2,
         const std::vector<Feature> &features,
         const Config &config);
+
+    // Selects features in the first image and follows those same features through
+    // the sequence. Each returned Track contains one result per input image.
+    std::vector<Track> track(const std::vector<Image> &imgs, const Config &config);
 }
