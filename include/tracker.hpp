@@ -37,9 +37,9 @@ namespace Tracker
     {
         Tracked,
         SmallDeterminant,
+        MaxIterations,
         OutOfBounds,
         LargeResidue,
-        MaxIterations,
         Replaced
     };
 
