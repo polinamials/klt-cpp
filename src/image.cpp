@@ -9,7 +9,7 @@
 #include <limits>
 #include <cctype>
 
-namespace IO
+namespace KLT
 {
     namespace
     {
@@ -57,7 +57,7 @@ namespace IO
         return data[y * width + x];
     }
 
-    Image make_image(int width, int height, Color &color)
+    Image make_image(int width, int height, const Color &color)
     {
         Image img{width, height};
         img.pixel_format = PixelFormat::RGB;

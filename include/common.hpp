@@ -1,8 +1,11 @@
 #pragma once
 
+#include "image.hpp"
+
+#include <utility>
 #include <vector>
 
-namespace Common
+namespace KLT
 {
     struct Config
     {
@@ -36,6 +39,25 @@ namespace Common
 
     Kernels make_kernels(float sigma);
     float compute_smooth_sigma(const Config &config);
+
+    Image gaussian_blur(const Image &img, float sigma);
+    std::pair<Image, Image> image_gradients(const Image &img, float sigma);
+
+    namespace detail
+    {
+        void gaussian_blur_into(
+            const Image &img,
+            Image &temporary,
+            Image &result,
+            const std::vector<float> &kernel);
+
+        void image_gradients_into(
+            const Image &img,
+            Image &temporary,
+            Image &gradx,
+            Image &grady,
+            const Kernels &kernels);
+    }
 
     int get_gauss_radius(float sigma);
     int get_deriv_radius(float sigma);

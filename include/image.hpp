@@ -3,7 +3,7 @@
 #include <vector>
 #include <string>
 
-namespace IO
+namespace KLT
 {
     enum class PixelFormat
     {
@@ -17,7 +17,8 @@ namespace IO
         float g{};
         float b{};
 
-        Color(float r_in, float g_in, float b_in) : r(r_in), g(g_in), b(b_in) {}
+        constexpr Color(float r_in, float g_in, float b_in)
+            : r(r_in), g(g_in), b(b_in) {}
     };
 
     struct Image
@@ -32,7 +33,7 @@ namespace IO
         bool operator==(const Image &) const = default;
     };
 
-    Image make_image(int width, int height, Color &color);
+    Image make_image(int width, int height, const Color &color);
 
     Image make_image(int width, int height, float value = 255.0f);
 

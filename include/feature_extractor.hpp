@@ -1,12 +1,10 @@
 #pragma once
 
 #include <vector>
-#include <utility>
-
 #include "image.hpp"
 #include "common.hpp"
 
-namespace FeatureExtractor
+namespace KLT
 {
     struct Feature
     {
@@ -15,34 +13,37 @@ namespace FeatureExtractor
         float score;
     };
 
-    std::vector<Feature> select_good_features(const IO::Image &img, const Common::Config &config);
+    std::vector<Feature> select_good_features(
+        const Image &img,
+        const Config &config);
 
     // Fills lost feature slots using a caller-provided smoothed image and
     // matching gradients.
     void select_good_features(
-        const IO::Image &img,
-        const IO::Image &gradx,
-        const IO::Image &grady,
+        const Image &img,
+        const Image &gradx,
+        const Image &grady,
         std::vector<Feature> &features,
-        const Common::Config &config);
+        const Config &config);
 
     void replace_lost_features(
-        const IO::Image &img,
+        const Image &img,
         std::vector<Feature> &features,
-        const Common::Config &config);
+        const Config &config);
 
     // Reuses level zero of the current image and gradient pyramids.
     void replace_lost_features(
-        const IO::Image &img,
-        const IO::Image &gradx,
-        const IO::Image &grady,
+        const Image &img,
+        const Image &gradx,
+        const Image &grady,
         std::vector<Feature> &features,
-        const Common::Config &config);
+        const Config &config);
 
-    IO::Image gaussian_blur(const IO::Image &img, float sigma);
-
-    std::pair<IO::Image, IO::Image> image_gradients(const IO::Image &img, float sigma);
-
-    void draw_features(const IO::Image &img, IO::Image &output, const std::vector<Feature> &features, const IO::Color &color, int r = 1);
+    void draw_features(
+        const Image &img,
+        Image &output,
+        const std::vector<Feature> &features,
+        const Color &color,
+        int radius = 1);
 
 }

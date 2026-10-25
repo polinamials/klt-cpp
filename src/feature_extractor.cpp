@@ -9,75 +9,10 @@
 #include <stdexcept>
 #include <vector>
 
-using namespace IO;
-using namespace Common;
-
-namespace FeatureExtractor
+namespace KLT
 {
     namespace
     {
-
-        // The caller's original implementation uses correlation (sample at x+k),
-        // not mathematically reversed convolution. Keep that convention, including
-        // the sign of the Gaussian derivative, for compatibility with the tracker.
-        // Exploit kernel symmetry: one multiply for each +/- pair.
-        template <bool Vertical, bool Derivative>
-        void filter_axis(const Image &src, Image &dst, const std::vector<float> &kernel)
-        {
-            const int w = src.width;
-            const int h = src.height;
-            const int radius = static_cast<int>(kernel.size()) - 1;
-            const int stride = Vertical ? w : 1;
-            const float *const in = src.data.data();
-            float *const out = dst.data.data();
-
-            for (int y = 0; y < h; ++y)
-            {
-                const bool interior_row = y >= radius && y + radius < h;
-                for (int x = 0; x < w; ++x)
-                {
-                    const std::size_t pos = static_cast<std::size_t>(y) * w + x;
-                    float sum = Derivative ? 0.0f : kernel[0] * in[pos];
-                    const bool interior = Vertical ? interior_row : (x >= radius && x + radius < w);
-
-                    if (interior)
-                    {
-                        for (int i = 1; i <= radius; ++i)
-                        {
-                            const std::size_t offset = static_cast<std::size_t>(i) * stride;
-                            if constexpr (Derivative)
-                                sum += kernel[i] * (in[pos + offset] - in[pos - offset]);
-                            else
-                                sum += kernel[i] * (in[pos + offset] + in[pos - offset]);
-                        }
-                    }
-                    else
-                    {
-                        // Match Image::get() clamping at image boundaries.
-                        for (int i = 1; i <= radius; ++i)
-                        {
-                            float plus, minus;
-                            if constexpr (Vertical)
-                            {
-                                plus = in[static_cast<std::size_t>(std::min(h - 1, y + i)) * w + x];
-                                minus = in[static_cast<std::size_t>(std::max(0, y - i)) * w + x];
-                            }
-                            else
-                            {
-                                plus = in[static_cast<std::size_t>(y) * w + std::min(w - 1, x + i)];
-                                minus = in[static_cast<std::size_t>(y) * w + std::max(0, x - i)];
-                            }
-                            if constexpr (Derivative)
-                                sum += kernel[i] * (plus - minus);
-                            else
-                                sum += kernel[i] * (plus + minus);
-                        }
-                    }
-                    out[pos] = sum;
-                }
-            }
-        }
-
         struct Scratch
         {
             Image blur_tmp{0, 0};
@@ -97,28 +32,10 @@ namespace FeatureExtractor
             return s;
         }
 
-        void gaussian_blur_into(const Image &img, Image &tmp, Image &result,
-                                const std::vector<float> &kernel)
-        {
-            resize_image(tmp, img.width, img.height);
-            resize_image(result, img.width, img.height);
-            filter_axis<false, false>(img, tmp, kernel);
-            filter_axis<true, false>(tmp, result, kernel);
-        }
-
         void compute_gradients(const Image &img, Scratch &s, const Kernels &k)
         {
-            resize_image(s.tmp, img.width, img.height);
-            resize_image(s.gradx, img.width, img.height);
-            resize_image(s.grady, img.width, img.height);
-
-            // x gradient: derivative horizontally, Gaussian smoothing vertically.
-            filter_axis<false, true>(img, s.tmp, k.deriv);
-            filter_axis<true, false>(s.tmp, s.gradx, k.gauss);
-
-            // y gradient: derivative vertically, Gaussian smoothing horizontally.
-            filter_axis<true, true>(img, s.tmp, k.deriv);
-            filter_axis<false, false>(s.tmp, s.grady, k.gauss);
+            detail::image_gradients_into(
+                img, s.tmp, s.gradx, s.grady, k);
         }
 
         // An exact sliding box sum of gradient products, apart from floating-point
@@ -342,22 +259,6 @@ namespace FeatureExtractor
 
     } // anonymous namespace
 
-    Image gaussian_blur(const Image &img, float sigma)
-    {
-        const auto k = make_kernels(sigma);
-        Image tmp{img.width, img.height};
-        Image result{img.width, img.height};
-        gaussian_blur_into(img, tmp, result, k.gauss);
-        return result;
-    }
-
-    std::pair<Image, Image> image_gradients(const Image &img, float sigma)
-    {
-        Scratch local;
-        compute_gradients(img, local, make_kernels(sigma));
-        return {std::move(local.gradx), std::move(local.grady)};
-    }
-
     std::vector<Feature> select_good_features(const Image &img, const Config &config)
     {
         assert(config.window_width >= 3 && config.window_width % 2 == 1);
@@ -372,7 +273,8 @@ namespace FeatureExtractor
 
         auto &s = scratch();
         const auto smooth_kernels = make_kernels(compute_smooth_sigma(config));
-        gaussian_blur_into(img, s.blur_tmp, s.smoothed, smooth_kernels.gauss);
+        detail::gaussian_blur_into(
+            img, s.blur_tmp, s.smoothed, smooth_kernels.gauss);
         compute_gradients(s.smoothed, s, make_kernels(config.sigma));
         find_candidates(img, s.gradx, s.grady, config, s);
         return choose_features(img, config, s);
@@ -431,7 +333,8 @@ namespace FeatureExtractor
 
         auto &s = scratch();
         const auto smooth_kernels = make_kernels(compute_smooth_sigma(config));
-        gaussian_blur_into(img, s.blur_tmp, s.smoothed, smooth_kernels.gauss);
+        detail::gaussian_blur_into(
+            img, s.blur_tmp, s.smoothed, smooth_kernels.gauss);
         compute_gradients(s.smoothed, s, make_kernels(config.sigma));
         replace_lost_features(s.smoothed, s.gradx, s.grady, features, config);
     }
@@ -484,4 +387,4 @@ namespace FeatureExtractor
         }
     }
 
-} // namespace FeatureExtractor
+} // namespace KLT

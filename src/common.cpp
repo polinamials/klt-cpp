@@ -2,10 +2,139 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <stdexcept>
 
-namespace Common
+namespace KLT
 {
+    namespace
+    {
+        // KLT uses correlation (sample at x+k), including the derivative sign.
+        // Store only half of each symmetric/antisymmetric kernel and process the
+        // +/- samples together.
+        template <bool Vertical, bool Derivative>
+        void filter_axis(
+            const Image &src,
+            Image &dst,
+            const std::vector<float> &kernel)
+        {
+            const int width = src.width;
+            const int height = src.height;
+            const int radius = static_cast<int>(kernel.size()) - 1;
+            const int stride = Vertical ? width : 1;
+            const float *const input = src.data.data();
+            float *const output = dst.data.data();
+
+            for (int y = 0; y < height; ++y)
+            {
+                const bool interior_row =
+                    y >= radius && y + radius < height;
+                for (int x = 0; x < width; ++x)
+                {
+                    const std::size_t position =
+                        static_cast<std::size_t>(y) * width + x;
+                    float sum = Derivative
+                                    ? 0.0f
+                                    : kernel[0] * input[position];
+                    const bool interior = Vertical
+                                              ? interior_row
+                                              : x >= radius &&
+                                                    x + radius < width;
+
+                    if (interior)
+                    {
+                        for (int i = 1; i <= radius; ++i)
+                        {
+                            const std::size_t offset =
+                                static_cast<std::size_t>(i) * stride;
+                            if constexpr (Derivative)
+                            {
+                                sum += kernel[i] *
+                                       (input[position + offset] -
+                                        input[position - offset]);
+                            }
+                            else
+                            {
+                                sum += kernel[i] *
+                                       (input[position + offset] +
+                                        input[position - offset]);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        for (int i = 1; i <= radius; ++i)
+                        {
+                            float plus;
+                            float minus;
+                            if constexpr (Vertical)
+                            {
+                                plus = input[
+                                    static_cast<std::size_t>(
+                                        std::min(height - 1, y + i)) *
+                                        width +
+                                    x];
+                                minus = input[
+                                    static_cast<std::size_t>(
+                                        std::max(0, y - i)) *
+                                        width +
+                                    x];
+                            }
+                            else
+                            {
+                                plus = input[
+                                    static_cast<std::size_t>(y) * width +
+                                    std::min(width - 1, x + i)];
+                                minus = input[
+                                    static_cast<std::size_t>(y) * width +
+                                    std::max(0, x - i)];
+                            }
+
+                            if constexpr (Derivative)
+                                sum += kernel[i] * (plus - minus);
+                            else
+                                sum += kernel[i] * (plus + minus);
+                        }
+                    }
+                    output[position] = sum;
+                }
+            }
+        }
+    }
+
+    namespace detail
+    {
+        void gaussian_blur_into(
+            const Image &img,
+            Image &temporary,
+            Image &result,
+            const std::vector<float> &kernel)
+        {
+            resize_image(temporary, img.width, img.height);
+            resize_image(result, img.width, img.height);
+            filter_axis<false, false>(img, temporary, kernel);
+            filter_axis<true, false>(temporary, result, kernel);
+        }
+
+        void image_gradients_into(
+            const Image &img,
+            Image &temporary,
+            Image &gradx,
+            Image &grady,
+            const Kernels &kernels)
+        {
+            resize_image(temporary, img.width, img.height);
+            resize_image(gradx, img.width, img.height);
+            resize_image(grady, img.width, img.height);
+
+            filter_axis<false, true>(img, temporary, kernels.deriv);
+            filter_axis<true, false>(temporary, gradx, kernels.gauss);
+
+            filter_axis<true, true>(img, temporary, kernels.deriv);
+            filter_axis<false, false>(temporary, grady, kernels.gauss);
+        }
+    }
+
     int get_gauss_radius(float sigma)
     {
         return static_cast<int>(3.0348542587702925 * sigma);
@@ -59,6 +188,25 @@ namespace Common
     {
         return config.smooth_sigma_fact *
                std::max(config.window_width, config.window_height);
+    }
+
+    Image gaussian_blur(const Image &img, float sigma)
+    {
+        Image temporary;
+        Image result;
+        detail::gaussian_blur_into(
+            img, temporary, result, make_kernels(sigma).gauss);
+        return result;
+    }
+
+    std::pair<Image, Image> image_gradients(const Image &img, float sigma)
+    {
+        Image temporary;
+        Image gradx;
+        Image grady;
+        detail::image_gradients_into(
+            img, temporary, gradx, grady, make_kernels(sigma));
+        return {std::move(gradx), std::move(grady)};
     }
 
     void update_pyramid_settings(Config &config, int search_range)

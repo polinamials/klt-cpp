@@ -12,6 +12,8 @@
 #include <iostream>
 #include <array>
 
+using namespace KLT;
+
 std::string g_image_path{"images"};
 std::string g_output_path{"output"};
 
@@ -34,8 +36,6 @@ const std::array<TestRectangle, 2> g_test_rectangles{{
     {40, 40, 55, 65, 0.0f, {255.0f, 0.0f, 0.0f}},
     {100, 110, 200, 200, 0.0f, {0.0f, 0.0f, 255.0f}},
 }};
-
-using namespace Tracker;
 
 int main(int argc, char **argv)
 {

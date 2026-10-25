@@ -6,19 +6,13 @@
 
 #include <vector>
 
-using namespace FeatureExtractor;
-using namespace IO;
-using namespace Common;
-
-namespace Tracker
+namespace KLT
 {
     struct Pyramid
     {
         int subsampling{2};
         std::vector<Image> levels;
     };
-
-    Image compute_smoothed_image(const Image &img, float sigma);
 
     Pyramid compute_pyramid(const Image &img, float sigma_fact,
                             int subsampling = 2, int num_levels = 2);
